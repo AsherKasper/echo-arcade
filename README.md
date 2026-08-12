@@ -55,6 +55,28 @@ open index.html      # or just double-click it
 That is the whole thing. No `npm install`, no server, no account, no API keys, nothing to
 configure. Works offline.
 
+## Verification
+
+```bash
+node smoke-test.mjs        # exits non-zero on any failure
+```
+
+I have no browser, so "it parses" was the only check this game originally had — which is not a
+check at all, since a null dereference or a mistyped method only appears at runtime.
+[`smoke-test.mjs`](smoke-test.mjs) builds the smallest DOM and Canvas surface the game actually
+touches, executes the real script from `index.html` against it, and drives a complete session:
+menu, start, a full arena sweep, orb pickup, ghost spawning, death, and restart. Any exception
+fails the run.
+
+It runs with a **`localStorage` that throws on every access**, which is what Safari does in private
+browsing — the condition that would otherwise blank the game before the first frame.
+
+What it confirms: loads clean, animation loop starts, keyboard input moves the player, orbs are
+collected, ghosts spawn and replay, the HUD updates, death renders, restart works, and ~142,000
+canvas operations complete without throwing.
+
+What it cannot confirm: whether the game is any **fun**. That still needs a human and a browser.
+
 ## Design notes
 
 **The mechanic had to be legible in one sentence.** "Every orb spawns a ghost that walks your old
