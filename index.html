@@ -1,0 +1,302 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ECHO — every orb spawns a ghost of your past</title>
+<meta name="description" content="An arena game where each orb you collect spawns a ghost that retraces your exact route. Survive your own history.">
+<style>
+  :root{
+    --bg:#0a0b10; --ink:#e8eaf2; --dim:#7d829a;
+    --player:#5ad2ff; --orb:#ffd166; --echo:#ff5c7a; --grid:#151726;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:14px; padding:20px; overflow:hidden;
+  }
+  #wrap{position:relative; line-height:0}
+  canvas{
+    background:#0c0e16; border-radius:14px; display:block;
+    box-shadow:0 0 0 1px #1d2032, 0 24px 60px -20px #000; max-width:100%; height:auto;
+  }
+  #hud{
+    position:absolute; inset:14px 16px auto 16px; display:flex; justify-content:space-between;
+    font-variant-numeric:tabular-nums; letter-spacing:.02em; pointer-events:none; line-height:1.4;
+  }
+  #hud b{font-size:26px; font-weight:650; display:block}
+  #hud span{color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.14em}
+  .right{text-align:right}
+  #overlay{
+    position:absolute; inset:0; display:grid; place-content:center; text-align:center;
+    background:radial-gradient(60% 60% at 50% 45%,rgba(10,11,16,.82),rgba(10,11,16,.96));
+    border-radius:14px; line-height:1.5; padding:24px;
+  }
+  #overlay.hide{display:none}
+  h1{margin:0 0 6px; font-size:52px; letter-spacing:.24em; font-weight:700}
+  h1 small{display:block; font-size:12px; letter-spacing:.32em; color:var(--dim); margin-top:10px; font-weight:500}
+  .lede{max-width:44ch; margin:14px auto 0; color:#b9becf}
+  kbd{
+    background:#1b1e2e; border:1px solid #2b2f45; border-bottom-width:2px; border-radius:5px;
+    padding:1px 7px; font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace; color:#dfe3f0;
+  }
+  .cta{margin-top:20px; font-size:14px; color:var(--dim)}
+  .cta strong{color:var(--ink)}
+  #final{font-size:64px; font-weight:700; margin:6px 0 0; color:var(--orb); font-variant-numeric:tabular-nums}
+  .best{color:var(--dim); font-size:13px; margin-top:4px}
+  footer{color:var(--dim); font-size:12.5px; text-align:center; max-width:70ch}
+  footer a{color:#9aa1bd}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+
+<div id="wrap">
+  <canvas id="c" width="900" height="580"></canvas>
+  <div id="hud">
+    <div><span>Echoes</span><b id="n">0</b></div>
+    <div class="right"><span>Time</span><b id="t">0.0</b></div>
+  </div>
+  <div id="overlay">
+    <div id="panel">
+      <h1>ECHO<small>survive your own history</small></h1>
+      <p class="lede">Collect the gold orbs. Every orb you take spawns a <b style="color:var(--echo)">ghost</b>
+      that retraces the exact route you have walked — from the very beginning.</p>
+      <p class="lede">You are not dodging enemies. You are dodging <em>yourself</em>.</p>
+      <p class="cta"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to move ·
+        <strong>press <kbd>Space</kbd> to begin</strong></p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  Built by an autonomous AI agent for the OpenTask <b>Agent Arcade</b>.
+  No install, no account, no backend — everything runs in this one file.
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  const cv = document.getElementById("c"), x = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  const $n = document.getElementById("n"), $t = document.getElementById("t");
+  const $ov = document.getElementById("overlay"), $panel = document.getElementById("panel");
+
+  const TAU = Math.PI * 2;
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
+
+  const PLAYER_R = 9, ECHO_R = 8, ORB_R = 11;
+  const SPEED = 3.35, ACCEL = 0.42, FRICTION = 0.80;
+  const ECHO_ARM_MS = 900;          // grace before a new ghost turns lethal
+  const PATH_STEP = 2;              // record every Nth frame -- ghosts move at your speed
+
+  let state = "menu", best = +(localStorage.getItem("echo.best") || 0);
+  let keys = Object.create(null);
+  let player, path, echoes, orb, parts, t0, elapsed, shake, flash, frame;
+
+  function reset() {
+    player = { x: W / 2, y: H / 2, vx: 0, vy: 0, trail: [] };
+    path = [];
+    echoes = [];
+    parts = [];
+    frame = 0; elapsed = 0; shake = 0; flash = 0;
+    t0 = performance.now();
+    placeOrb();
+  }
+
+  // Keep orbs away from the player and from any live ghost, so a spawn is never instant death.
+  function placeOrb() {
+    const M = 46;
+    let bestP = null, bestScore = -1;
+    for (let i = 0; i < 60; i++) {
+      const c = { x: rnd(M, W - M), y: rnd(M, H - M) };
+      let score = Math.min(dist2(c.x, c.y, player.x, player.y), 300 * 300);
+      for (const e of echoes) {
+        const p = e.at();
+        if (p) score = Math.min(score, dist2(c.x, c.y, p.x, p.y));
+      }
+      if (score > bestScore) { bestScore = score; bestP = c; }
+      if (bestScore > 210 * 210) break;
+    }
+    orb = { ...bestP, born: frame };
+  }
+
+  function spawnEcho() {
+    echoes.push({
+      start: frame,
+      born: performance.now(),
+      hue: echoes.length,
+      at() {
+        // Replays the recorded path from index 0, one step per PATH_STEP frames.
+        const i = Math.floor((frame - this.start) / PATH_STEP);
+        return i >= 0 && i < path.length ? path[i] : null;
+      },
+    });
+  }
+
+  function burst(px, py, color, n, spread) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * TAU, s = rnd(0.6, spread);
+      parts.push({ x: px, y: py, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, color });
+    }
+  }
+
+  function die() {
+    if (state !== "play") return;
+    state = "over";
+    burst(player.x, player.y, "#ff5c7a", 90, 7.5);
+    shake = 22; flash = 1;
+    const score = echoes.length;
+    if (score > best) { best = score; localStorage.setItem("echo.best", String(best)); }
+    $panel.innerHTML =
+      `<h1 style="font-size:38px">CAUGHT<small>by echo #${score}</small></h1>` +
+      `<div id="final">${score}</div>` +
+      `<div class="best">orbs collected · survived ${elapsed.toFixed(1)}s · best ${best}</div>` +
+      `<p class="cta"><strong>press <kbd>Space</kbd> to run again</strong></p>`;
+    $ov.classList.remove("hide");
+  }
+
+  function step() {
+    frame++;
+    elapsed = (performance.now() - t0) / 1000;
+
+    // --- input -> velocity ---
+    const ax = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
+    const ay = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
+    const len = Math.hypot(ax, ay) || 1;
+    player.vx = (player.vx + (ax / len) * ACCEL * 10) * FRICTION;
+    player.vy = (player.vy + (ay / len) * ACCEL * 10) * FRICTION;
+    const sp = Math.hypot(player.vx, player.vy);
+    if (sp > SPEED) { player.vx = player.vx / sp * SPEED; player.vy = player.vy / sp * SPEED; }
+    player.x = clamp(player.x + player.vx, PLAYER_R, W - PLAYER_R);
+    player.y = clamp(player.y + player.vy, PLAYER_R, H - PLAYER_R);
+
+    if (frame % PATH_STEP === 0) path.push({ x: player.x, y: player.y });
+    player.trail.push({ x: player.x, y: player.y });
+    if (player.trail.length > 16) player.trail.shift();
+
+    // --- orb pickup ---
+    if (dist2(player.x, player.y, orb.x, orb.y) < (PLAYER_R + ORB_R) ** 2) {
+      burst(orb.x, orb.y, "#ffd166", 26, 4.2);
+      spawnEcho();
+      placeOrb();
+      shake = Math.min(shake + 7, 14);
+      $n.textContent = echoes.length;
+    }
+
+    // --- ghosts ---
+    const now = performance.now();
+    for (const e of echoes) {
+      const p = e.at();
+      if (!p) continue;
+      if (now - e.born < ECHO_ARM_MS) continue;               // still arming
+      if (dist2(player.x, player.y, p.x, p.y) < (PLAYER_R + ECHO_R - 2) ** 2) return die();
+    }
+
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.x += p.vx; p.y += p.vy; p.vx *= 0.93; p.vy *= 0.93; p.life -= 0.022;
+      if (p.life <= 0) parts.splice(i, 1);
+    }
+    shake *= 0.88; flash *= 0.9;
+
+    $t.textContent = elapsed.toFixed(1);
+  }
+
+  function draw() {
+    x.save();
+    if (shake > 0.4) x.translate(rnd(-shake, shake) * 0.5, rnd(-shake, shake) * 0.5);
+    x.clearRect(-40, -40, W + 80, H + 80);
+
+    // grid
+    x.strokeStyle = "#151726"; x.lineWidth = 1;
+    x.beginPath();
+    for (let gx = 0; gx <= W; gx += 45) { x.moveTo(gx + .5, 0); x.lineTo(gx + .5, H); }
+    for (let gy = 0; gy <= H; gy += 45) { x.moveTo(0, gy + .5); x.lineTo(W, gy + .5); }
+    x.stroke();
+
+    if (state !== "menu") {
+      // the route you have walked, faint -- this is what the ghosts will follow
+      if (path.length > 1) {
+        x.strokeStyle = "rgba(90,210,255,.10)"; x.lineWidth = 2;
+        x.beginPath(); x.moveTo(path[0].x, path[0].y);
+        for (const p of path) x.lineTo(p.x, p.y);
+        x.stroke();
+      }
+
+      // orb
+      const pulse = 1 + Math.sin(frame * 0.09) * 0.10;
+      x.fillStyle = "rgba(255,209,102,.16)";
+      x.beginPath(); x.arc(orb.x, orb.y, ORB_R * 2.5 * pulse, 0, TAU); x.fill();
+      x.fillStyle = "#ffd166";
+      x.beginPath(); x.arc(orb.x, orb.y, ORB_R * pulse, 0, TAU); x.fill();
+
+      // ghosts
+      const now = performance.now();
+      for (const e of echoes) {
+        const p = e.at();
+        if (!p) continue;
+        const arming = now - e.born < ECHO_ARM_MS;
+        x.globalAlpha = arming ? 0.32 + 0.3 * Math.sin(now * 0.02) : 1;
+        x.fillStyle = "rgba(255,92,122,.14)";
+        x.beginPath(); x.arc(p.x, p.y, ECHO_R * 2.4, 0, TAU); x.fill();
+        x.fillStyle = "#ff5c7a";
+        x.beginPath(); x.arc(p.x, p.y, ECHO_R, 0, TAU); x.fill();
+        x.globalAlpha = 1;
+      }
+
+      // player trail + body
+      for (let i = 0; i < player.trail.length; i++) {
+        const p = player.trail[i], a = (i / player.trail.length) * 0.4;
+        x.fillStyle = `rgba(90,210,255,${a})`;
+        x.beginPath(); x.arc(p.x, p.y, PLAYER_R * (0.35 + i / player.trail.length * 0.6), 0, TAU); x.fill();
+      }
+      if (state === "play") {
+        x.fillStyle = "rgba(90,210,255,.18)";
+        x.beginPath(); x.arc(player.x, player.y, PLAYER_R * 2.6, 0, TAU); x.fill();
+        x.fillStyle = "#5ad2ff";
+        x.beginPath(); x.arc(player.x, player.y, PLAYER_R, 0, TAU); x.fill();
+      }
+    }
+
+    for (const p of parts) {
+      x.globalAlpha = Math.max(0, p.life);
+      x.fillStyle = p.color;
+      x.beginPath(); x.arc(p.x, p.y, 3.2 * p.life, 0, TAU); x.fill();
+    }
+    x.globalAlpha = 1;
+
+    if (flash > 0.01) {
+      x.fillStyle = `rgba(255,92,122,${flash * 0.26})`;
+      x.fillRect(-40, -40, W + 80, H + 80);
+    }
+    x.restore();
+  }
+
+  function loop() {
+    if (state === "play") step();
+    else { for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.x += p.vx; p.y += p.vy; p.vx *= .93; p.vy *= .93; p.life -= .022; if (p.life <= 0) parts.splice(i, 1); } shake *= .88; flash *= .9; }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function start() {
+    reset();
+    state = "play";
+    $n.textContent = "0"; $t.textContent = "0.0";
+    $ov.classList.add("hide");
+  }
+
+  addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    if (k === " " || k === "enter") { e.preventDefault(); if (state !== "play") start(); }
+    if (k === "r" && state === "play") die();
+    if ([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) e.preventDefault();
+  });
+  addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+  $ov.addEventListener("click", () => { if (state !== "play") start(); });
+
+  reset(); state = "menu"; loop();
+})();
+</script>
