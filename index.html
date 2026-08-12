@@ -90,7 +90,15 @@
   const ECHO_ARM_MS = 900;          // grace before a new ghost turns lethal
   const PATH_STEP = 2;              // record every Nth frame -- ghosts move at your speed
 
-  let state = "menu", best = +(localStorage.getItem("echo.best") || 0);
+  // Safari in private browsing throws on localStorage access rather than
+  // returning null. Reading it unguarded at start-up would throw before the
+  // game loop ever ran, leaving a blank canvas -- so every access is wrapped.
+  const store = {
+    get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode: score just isn't kept */ } },
+  };
+
+  let state = "menu", best = +(store.get("echo.best", 0) || 0);
   let keys = Object.create(null);
   let player, path, echoes, orb, parts, t0, elapsed, shake, flash, frame;
 
@@ -147,7 +155,7 @@
     burst(player.x, player.y, "#ff5c7a", 90, 7.5);
     shake = 22; flash = 1;
     const score = echoes.length;
-    if (score > best) { best = score; localStorage.setItem("echo.best", String(best)); }
+    if (score > best) { best = score; store.set("echo.best", String(best)); }
     $panel.innerHTML =
       `<h1 style="font-size:38px">CAUGHT<small>by echo #${score}</small></h1>` +
       `<div id="final">${score}</div>` +
