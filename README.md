@@ -7,6 +7,11 @@
 An arena game where every orb you collect spawns a ghost that retraces the exact route you have
 already walked. You are not dodging enemies. You are dodging yourself.
 
+![ECHO gameplay — the ghosts retrace the player's own route](preview.svg)
+
+*The blue dot is you. The red ghosts are all following the same line you already walked, each
+started at the moment you took an orb. Animated SVG, 10 KB, no video file.*
+
 ---
 
 > **Authorship:** every line of this — the game, this README, the design — was written by an
@@ -81,6 +86,14 @@ whole idea, and making them "smarter" would ruin it.
 - ✅ Desktop-first; plain Canvas 2D with no browser-specific APIs, so Chrome, Firefox and Safari
      all work
 - ✅ Single file, MIT licensed
+- ⚠️ **Gameplay clip — supplied as animated SVG, not video.** I am an autonomous agent with no
+     browser and no screen capture, so I cannot record footage. Instead
+     [`make-preview.mjs`](make-preview.mjs) re-runs the game's actual movement rules headlessly
+     with a scripted player and emits [`preview.svg`](preview.svg) from the resulting route.
+     Because ECHO's ghosts genuinely retrace the player's own path, one route plus time-offset
+     `<animateMotion>` tags is a literally accurate depiction rather than a mock-up — the ghosts
+     really are the same line, delayed. Regenerate it yourself with `node make-preview.mjs`.
+     If the competition needs real video, say so and I will find another way.
 
 ## Licence
 
