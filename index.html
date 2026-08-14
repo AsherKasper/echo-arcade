@@ -100,14 +100,14 @@
 
   let state = "menu", best = +(store.get("echo.best", 0) || 0);
   let keys = Object.create(null);
-  let player, path, echoes, orb, parts, t0, elapsed, shake, flash, frame;
+  let player, path, echoes, orb, parts, t0, elapsed, shake, flash, frame, killedBy;
 
   function reset() {
     player = { x: W / 2, y: H / 2, vx: 0, vy: 0, trail: [] };
     path = [];
     echoes = [];
     parts = [];
-    frame = 0; elapsed = 0; shake = 0; flash = 0;
+    frame = 0; elapsed = 0; shake = 0; flash = 0; killedBy = null;
     t0 = performance.now();
     placeOrb();
   }
@@ -149,15 +149,20 @@
     }
   }
 
-  function die() {
+  function die(killer) {
     if (state !== "play") return;
     state = "over";
+    // Mark the ghost that got you. In a game about being killed by your own
+    // past, "which one was it" is the single most important thing to answer,
+    // and the freeze-frame is the only chance to answer it.
+    killedBy = killer ?? null;
     burst(player.x, player.y, "#ff5c7a", 90, 7.5);
     shake = 22; flash = 1;
     const score = echoes.length;
+    const which = killedBy ? echoes.indexOf(killedBy) + 1 : null;
     if (score > best) { best = score; store.set("echo.best", String(best)); }
     $panel.innerHTML =
-      `<h1 style="font-size:38px">CAUGHT<small>by echo #${score}</small></h1>` +
+      `<h1 style="font-size:38px">CAUGHT<small>${which ? `by the ghost of orb #${which}` : "by your own route"}</small></h1>` +
       `<div id="final">${score}</div>` +
       `<div class="best">orbs collected · survived ${elapsed.toFixed(1)}s · best ${best}</div>` +
       `<p class="cta"><strong>press <kbd>Space</kbd> to run again</strong></p>`;
@@ -198,7 +203,7 @@
       const p = e.at();
       if (!p) continue;
       if (now - e.born < ECHO_ARM_MS) continue;               // still arming
-      if (dist2(player.x, player.y, p.x, p.y) < (PLAYER_R + ECHO_R - 2) ** 2) return die();
+      if (dist2(player.x, player.y, p.x, p.y) < (PLAYER_R + ECHO_R - 2) ** 2) return die(e);
     }
 
     for (let i = parts.length - 1; i >= 0; i--) {
@@ -250,6 +255,15 @@
         x.beginPath(); x.arc(p.x, p.y, ECHO_R * 2.4, 0, TAU); x.fill();
         x.fillStyle = "#ff5c7a";
         x.beginPath(); x.arc(p.x, p.y, ECHO_R, 0, TAU); x.fill();
+        if (e === killedBy) {
+          // ring + label so the freeze frame says which ghost caught you
+          x.strokeStyle = "#fff"; x.lineWidth = 2;
+          x.beginPath(); x.arc(p.x, p.y, ECHO_R + 7 + Math.sin(frame * 0.2) * 2, 0, TAU); x.stroke();
+          x.fillStyle = "#fff"; x.font = "600 11px ui-sans-serif,system-ui,sans-serif";
+          x.textAlign = "center";
+          x.fillText("this one", p.x, p.y - ECHO_R - 14);
+          x.textAlign = "start";
+        }
         x.globalAlpha = 1;
       }
 
